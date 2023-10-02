@@ -31,9 +31,9 @@ PROMPT_DIR = Path(__file__).parents[1] / "prompts"
 
 
 # TODO: IMPORTANT TO REMOVE, JUST HERE FOR TESTING
-Entrez.email = "johnmgiorgi@gmail.com"
-Entrez.api_key = "bcc7945770d76bca7aa1742fd723b320dc08"
-os.environ["OPENAI_API_KEY"] = "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"
+Entrez.email = ""
+Entrez.api_key = ""
+os.environ["OPENAI_API_KEY"] = ""
 
 
 random.seed(42)
