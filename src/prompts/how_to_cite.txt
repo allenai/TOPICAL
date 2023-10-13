@@ -1,0 +1,13 @@
+Every scientific claim in the topic page should be followed by an in-line citation to {id_database} using the provided {id_type}s. E.g. for a {id_type} of 12345678, format each citation like: "first identified in YYYY ([12345678])...".
+
+Use this syntax and URL EXACTLY. DO NOT under any circumstance format citations differently, e.g. DO NOT place them in an appendix or footnotes section and DO NOT use this syntax: [^1^], which you like to do.
+
+Avoid cramming a bunch of citations (>3) at the end of each sentence. Instead, place each citation IMMEDIATELY after the relevant claim. E.g. do this:
+
+"<entity> is associated with cancer ([12345678]), diabetes ([23456789]) and stroke ([34567891])."
+
+Not this:
+
+"<entity> is associated with cancer and diabetes ([12345678], [23456789], [34567891])."
+
+Choose the most appropriate citation per claim. Use the same citation only once. Consider all the provided literature when deciding what to cite, with a bias toward newer and more up-to-date papers. Most importantly, do not cite a paper just for the sake of it! Only cite a paper if it provides clear, direct and sufficient evidence to support your claim; topical relevance alone is not sufficient. Citing a paper that does not support your claim is worse than not making the claim at all.
