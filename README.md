@@ -49,8 +49,15 @@ poetry install
 Once installed, you can launch the demo with:
 
 ```bash
+ENTREZ_EMAIL="<your email>" \
+ENTREZ_API_KEY="<your Entrez API key>" \
+OPENAI_API_KEY="<your OpenAI API key>" \
 streamlit run src/topical/app.py
 ```
+
+> __Note__
+> `ENTREZ_EMAIL` and `ENTREZ_API_KEY` are optional but highly recommended. You can get an Entrez API key [here](https://ncbiinsights.ncbi.nlm.nih.gov/new-api-keys-for-the-e-utilities/).
+> An OpenAI API key is required. You can provide it in the UI or via the `OPENAI_API_KEY` environment variable, with the UI taking precedence.
 
 ### Human evaluation
 

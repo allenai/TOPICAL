@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import NewType
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 EntityMention = NewType("EntityMention", tuple[str, list[tuple[str, float]]])
 
@@ -11,7 +11,8 @@ class Date(BaseModel):
     month: str | None = None
     day: str | None = None
 
-    @validator("year")
+    @field_validator("year")
+    @classmethod
     def year_is_valid(cls, v):
         if not v.isdigit() or len(v) != 4:
             raise ValueError(f"Year must be a four digit number, got {v}")

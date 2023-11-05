@@ -39,11 +39,9 @@ PROMPT_DIR = Path(__file__).parents[1] / "prompts"
 # RegEx patterns
 cited_pmid = re.compile(r"\[(\d+)\]")  # identify citations in model generated topic page
 
-# TODO: IMPORTANT TO REMOVE, JUST HERE FOR TESTING
-Entrez.email = ""
-Entrez.api_key = ""
-os.environ["OPENAI_API_KEY"] = ""
-
+# Setup Entrez API
+Entrez.email = os.environ.get("ENTREZ_EMAIL")
+Entrez.api_key = os.environ.get("ENTREZ_API_KEY")
 
 random.seed(42)
 
@@ -93,8 +91,10 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
             day = pubdate.get("Day")
 
         # remove any html markup, which sometimes exists in abstract text downloaded from PubMed
-        title = html.fromstring(title).text_content()
-        abstract = html.fromstring(abstract).text_content()
+        if title:
+            title = html.fromstring(title).text_content()
+        if abstract:
+            abstract = html.fromstring(abstract).text_content()
 
         articles.append(
             {
@@ -231,7 +231,12 @@ def main():
             value="gpt-4-0613",
             help="Any valid model name for the OpenAI API. It is strongly recommended to use GPT-4.",
         )
-        openai_api_key = st.text_input("Enter your API Key:", type="password", help="Your key for the OpenAI API.")
+        openai_api_key = st.text_input(
+            "Enter your API Key:",
+            value=os.environ.get("OPENAI_API_KEY", ""),
+            type="password",
+            help="Your key for the OpenAI API.",
+        )
 
         "---"
 
@@ -323,6 +328,13 @@ def main():
             " potentially ambiguous names."
         ),
     ).strip()
+
+    if not openai_api_key:
+        st.warning("Please provide an OpenAI API key in the sidebar.", icon="🔑")
+        st.stop()
+
+    # Any key provided in the sidebar will override the environment variable
+    os.environ["OPENAI_API_KEY"] = openai_api_key
 
     if st.button("Generate Topic Page", type="primary"):
         with st.status(f"Generating topic page for _{entity}_...", expanded=debug) as status:
