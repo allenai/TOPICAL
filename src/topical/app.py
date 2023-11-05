@@ -14,6 +14,7 @@ import torch
 from Bio import Entrez
 from Bio.Entrez.Parser import DictionaryElement
 from InstructorEmbedding import INSTRUCTOR
+from lxml import html
 from sentence_transformers import util as sbert_util
 
 from topical import nlm, util
@@ -39,9 +40,9 @@ PROMPT_DIR = Path(__file__).parents[1] / "prompts"
 cited_pmid = re.compile(r"\[(\d+)\]")  # identify citations in model generated topic page
 
 # TODO: IMPORTANT TO REMOVE, JUST HERE FOR TESTING
-Entrez.email = ""
-Entrez.api_key = ""
-os.environ["OPENAI_API_KEY"] = ""
+Entrez.email = "johnmgiorgi@gmail.com"
+Entrez.api_key = "bcc7945770d76bca7aa1742fd723b320dc08"
+os.environ["OPENAI_API_KEY"] = "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"
 
 
 random.seed(42)
@@ -90,6 +91,10 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
             year = pubdate.get("Year")
             month = pubdate.get("Month")
             day = pubdate.get("Day")
+
+        # remove any html markup, which sometimes exists in abstract text downloaded from PubMed
+        title = html.fromstring(title).text_content()
+        abstract = html.fromstring(abstract).text_content()
 
         articles.append(
             {
@@ -152,7 +157,8 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
         date += f" {pub_date['year'].strip()}" if pub_date["year"] else ""
 
         formatted_article = f"PMID: {id_} Publication Date: {date} Title: {title} Abstract: {abstract}"
-        return util.sanitize_text(formatted_article)
+        formatted_article = util.sanitize_text(formatted_article)
+        return formatted_article
 
     # Compute a weight for each cluster based on the sqrt of its size. If there is remaining space in the prompt
     # after including all centroids, we will sample from the clusters with probability proportional to these weights
@@ -436,7 +442,7 @@ def main():
                 clusters = [[i] for i in range(len(articles))]
 
             # Design a prompt to get GPT to generate topic pages
-            system_prompt = (PROMPT_DIR / "system.txt").read_text().format(domain="biomedical")
+            system_prompt = (PROMPT_DIR / "system.txt").read_text().format(domain="biomedical").strip()
             instructions_prompt = (
                 (PROMPT_DIR / "instructions.txt")
                 .read_text()
@@ -445,11 +451,11 @@ def main():
                     end_year=end_year,
                     min_articles_to_cluster=MIN_ARTICLES_TO_CLUSTER,
                 )
-            )
+            ).strip()
             how_to_cite_prompt = (
                 (PROMPT_DIR / "how_to_cite.txt").read_text().format(id_database="PubMed", id_type="PMID")
-            )
-            topic_page_prompt = (PROMPT_DIR / "topic_page.txt").read_text()
+            ).strip()
+            topic_page_prompt = (PROMPT_DIR / "topic_page.txt").read_text().strip()
 
             llm = load_llm(model_choice)
             prompt = guidance(
@@ -459,15 +465,15 @@ def main():
 {{~/system}}
 
 {{#user~}}
-INSTRUCTIONS
+# INSTRUCTIONS
 
 {{instructions_prompt}}
 
-HOW TO CITE YOUR CLAIMS
+## HOW TO CITE YOUR CLAIMS
 
 {{how_to_cite_prompt}}
 
-ENTITY OR CONCEPT
+# ENTITY OR CONCEPT
 
 Canonicalized entity name: {{canonicalized_entity_name}}
 Publications per year: {{publications_per_year}}
@@ -476,7 +482,7 @@ Supporting literature:
 
 {{evidence}}
 
-TOPIC PAGE
+# TOPIC PAGE
 
 {{topic_page_prompt}}
 {{~/user}}
@@ -513,14 +519,6 @@ TOPIC PAGE
             if debug:
                 st.warning(f"__Evidence__:\n\n{evidence}")
                 st.warning(f"__Prompt__:\n\n{prompt.text}")
-
-            if not evidence:
-                st.warning(
-                    f"No valid abstracts after filtering for a minimum sentence length of {MIN_SENT_LEN} whitespace"
-                    f" tokens and minimum number of sentences of {MIN_SENTS}.",
-                    icon="😔",
-                )
-                st.stop()
 
             with st.spinner("Prompting model..."):
                 response = prompt(
