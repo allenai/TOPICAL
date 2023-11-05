@@ -40,8 +40,8 @@ PROMPT_DIR = Path(__file__).parents[1] / "prompts"
 cited_pmid = re.compile(r"\[(\d+)\]")  # identify citations in model generated topic page
 
 # TODO: IMPORTANT TO REMOVE, JUST HERE FOR TESTING
-Entrez.email = "johnmgiorgi@gmail.com"
-Entrez.api_key = "bcc7945770d76bca7aa1742fd723b320dc08"
+Entrez.email = ""
+Entrez.api_key = ""
 os.environ["OPENAI_API_KEY"] = ""
 
 
