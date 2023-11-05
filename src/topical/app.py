@@ -231,7 +231,12 @@ def main():
             value="gpt-4-0613",
             help="Any valid model name for the OpenAI API. It is strongly recommended to use GPT-4.",
         )
-        openai_api_key = st.text_input("Enter your API Key:", type="password", help="Your key for the OpenAI API.")
+        openai_api_key = st.text_input(
+            "Enter your API Key:",
+            value=os.environ.get("OPENAI_API_KEY", ""),
+            type="password",
+            help="Your key for the OpenAI API.",
+        )
 
         "---"
 
@@ -324,13 +329,12 @@ def main():
         ),
     ).strip()
 
-    # An OpenAI API key provided in the sidebar takes precedence over the environment variable
-    if openai_api_key.strip():
-        os.environ["OPENAI_API_KEY"] = openai_api_key.strip()
-
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not openai_api_key:
         st.warning("Please provide an OpenAI API key in the sidebar.", icon="🔑")
         st.stop()
+
+    # Any key provided in the sidebar will override the environment variable
+    os.environ["OPENAI_API_KEY"] = openai_api_key
 
     if st.button("Generate Topic Page", type="primary"):
         with st.status(f"Generating topic page for _{entity}_...", expanded=debug) as status:
