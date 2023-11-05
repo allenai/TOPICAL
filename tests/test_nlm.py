@@ -1,7 +1,7 @@
 from topical import nlm
 
 
-def testget_year_from_medline_date():
+def test_get_year_from_medline_date():
     # Examples taken from: https://www.nlm.nih.gov/bsd/licensee/elements_descriptions.html#pubdate
     expected = "2000"
 
