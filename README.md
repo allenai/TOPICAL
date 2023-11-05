@@ -1,3 +1,5 @@
+[![ci](https://github.com/allenai/TOPICAL/actions/workflows/ci.yml/badge.svg)](https://github.com/allenai/TOPICAL/actions/workflows/ci.yml)
+
 # 🪄📄 TOPICAL: TOPIC pages AutomagicaLly
 
 A tool for automatically generated topic pages for a broad range of biomedical entities and concepts.
@@ -55,7 +57,13 @@ streamlit run src/topical/app.py
 To reproduce our sampling of biomedical entities for human evaluation, run:
 
 ```python
-from topical import nlm
 import random
 
-descriptors = {descr.ui: descr for descr in nlm.fetch_mesh() if int(descr.date_created.year) >= 2013 and descr.max_tree_depth() >= 7}
+from topical import nlm
+
+descriptors = {
+    descr.ui: descr
+    for descr in nlm.fetch_mesh()
+    if int(descr.date_created.year) >= 2013 and descr.max_tree_depth() >= 7
+}
+```
