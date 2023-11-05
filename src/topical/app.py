@@ -42,7 +42,7 @@ cited_pmid = re.compile(r"\[(\d+)\]")  # identify citations in model generated t
 # TODO: IMPORTANT TO REMOVE, JUST HERE FOR TESTING
 Entrez.email = "johnmgiorgi@gmail.com"
 Entrez.api_key = "bcc7945770d76bca7aa1742fd723b320dc08"
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = ""
 
 
 random.seed(42)
