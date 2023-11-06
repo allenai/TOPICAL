@@ -570,20 +570,23 @@ Supporting literature:
             status.update(label=f"Generated topic page for '_{entity}_'")
 
         if response:
-            # Basic post-processing to ensure we get three sections back
+            # Basic post-processing
+            breakpoint()
+
             topic_page = response["topic_page"].strip()
+            # Remove the entity name if the model provided it
+            topic_page = topic_page.lstrip(entity).lstrip(f"__{entity}__")
+            # Ensure there are only three sections
             topic_page_sections = topic_page.split("\n\n")
             if len(topic_page_sections) > 3:
                 topic_page = "\n\n".join(
-                    [topic_page_sections[0]], topic_page_sections[1:-1] + [topic_page_sections[-1]]
+                    [topic_page_sections[0].strip(), " ".join(topic_page_sections[1:-1]), topic_page_sections[-1]]
                 )
-
-            # Remove the entity name if the model provided it and replace with markdown header
-            topic_page = topic_page.lstrip(entity)
-            topic_page = f"### {entity}\n\n{topic_page}"
 
             # Hyperlink all the in-line citations
             topic_page = replace_pmid_with_markdown_link(topic_page)
+
+            topic_page = f"### {entity}\n\n{topic_page}"
             st.write(topic_page)
 
             # Allow user to download raw markdown formatted topic page
