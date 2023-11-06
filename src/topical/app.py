@@ -574,7 +574,9 @@ Supporting literature:
             topic_page = response["topic_page"].strip()
             topic_page_sections = topic_page.split("\n\n")
             if len(topic_page_sections) > 3:
-                topic_page = "\n\n".join([topic_page_sections[0], topic_page_sections[1:-1] + topic_page_sections[-1]])
+                topic_page = "\n\n".join(
+                    [topic_page_sections[0]], topic_page_sections[1:-1] + [topic_page_sections[-1]]
+                )
 
             # Remove the entity name if the model provided it and replace with markdown header
             topic_page = topic_page.lstrip(entity)
