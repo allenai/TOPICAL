@@ -570,7 +570,17 @@ Supporting literature:
             status.update(label=f"Generated topic page for '_{entity}_'")
 
         if response:
-            topic_page = f'### {entity}\n\n{response["topic_page"].strip()}'
+            # Basic post-processing to ensure we get three sections back
+            topic_page = response["topic_page"].strip()
+            topic_page_sections = topic_page.split("\n\n")
+            if len(topic_page_sections) > 3:
+                topic_page = "\n\n".join([topic_page_sections[0], topic_page_sections[1:-1] + topic_page_sections[-1]])
+
+            # Remove the entity name if the model provided it and replace with markdown header
+            topic_page = topic_page.lstrip(entity)
+            topic_page = f"### {entity}\n\n{topic_page}"
+
+            # Hyperlink all the in-line citations
             topic_page = replace_pmid_with_markdown_link(topic_page)
             st.write(topic_page)
 
