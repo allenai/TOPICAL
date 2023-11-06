@@ -571,8 +571,6 @@ Supporting literature:
 
         if response:
             # Basic post-processing
-            breakpoint()
-
             topic_page = response["topic_page"].strip()
             # Remove the entity name if the model provided it
             topic_page = topic_page.lstrip(entity).lstrip(f"__{entity}__")
