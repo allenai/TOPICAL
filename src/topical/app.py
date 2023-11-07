@@ -13,14 +13,14 @@ import tiktoken
 import torch
 from Bio import Entrez
 from Bio.Entrez.Parser import DictionaryElement
-from InstructorEmbedding import INSTRUCTOR
 from lxml import html
+from more_itertools import chunked
 from sentence_transformers import util as sbert_util
+from transformers import AutoAdapterModel, AutoTokenizer
 
 from topical import nlm, util
 
 # Clustering settings
-EMBEDDING_MODEL = "hkunlp/instructor-{model_size}"  # The model used to embed evidence for clustering
 MIN_ARTICLES_TO_CLUSTER = 100  # If there are less than this number of articles, skip clustering
 MIN_ARTICLES_TO_AVOID_BACKOFF = 2  # If there are less than this number of clusters, perform backoff
 BACKOFF_THRESHOLD = 0.02  # The amount to reduce the cosine similarity by during backoff
@@ -64,6 +64,9 @@ def plot_publications_per_year(records: DictionaryElement, end_year: str) -> dic
 @st.cache_data(show_spinner=False)
 def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str | dict[str, str]]]:
     """Performs basic pre-processing of the articles in records and returns them as a list of dictionaries."""
+    ptext = "{} / {} articles"
+    pbar = st.progress(0, text=ptext.format(0, len(records["PubmedArticle"])))
+
     articles = []
     for article in records["PubmedArticle"]:
         medline_citation = article["MedlineCitation"]
@@ -104,29 +107,56 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
                 "abstract": abstract,
             }
         )
+
+        # Update the progress bar
+        pbar.progress(
+            len(articles) / len(records["PubmedArticle"]),
+            text=ptext.format(
+                len(articles),
+                len(records["PubmedArticle"]),
+            ),
+        )
+
     return articles
 
 
 @st.cache_resource(show_spinner="Loading encoder...")
-def load_encoder(model_size: str = "large", quantize: bool = True):
+def load_encoder():
     """Load an Intructor-based text encoder for embedding titles and abstracts."""
-    model = INSTRUCTOR(EMBEDDING_MODEL.format(model_size=model_size))
-    if not torch.cuda.is_available() and quantize:
-        model = torch.quantization.quantize_dynamic(model, {torch.nn.Linear}, dtype=torch.qint8)
-    return model
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = AutoAdapterModel.from_pretrained("allenai/specter2_aug2023refresh_base")
+    _ = model.load_adapter("allenai/specter2_aug2023refresh", source="hf", set_active=True)
+    model.to(device)
+    tokenizer = AutoTokenizer.from_pretrained("allenai/specter2_base")
+    return model, tokenizer
 
 
-@st.cache_data(show_spinner="Embedding titles and abstracts (this could take up to a few minutes)...")
-def embed_evidence(articles: list[str], _encoder, _batch_size: int = 64):
+@torch.no_grad()
+@st.cache_data(show_spinner=False)
+def embed_evidence(articles: list[str], _encoder, _tokenizer, _batch_size: int = 128):
     """Jointly embed the titles and abstracts in articles for the given encoder."""
-    instruction = "Represent the Biomedical abstract for clustering"
-    return _encoder.encode(
-        [[instruction, f"Title: {article['title']} Abstract: {article['abstract']}"] for article in articles],
-        show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_tensor=True,
-        batch_size=_batch_size,
-    )
+    ptext = "{} / {} articles"
+    pbar = st.progress(0, text=ptext.format(0, len(articles)))
+
+    embeddings = []
+    for batch in chunked(articles, _batch_size):
+        text_batch = [f"{example['title']} {_tokenizer.sep_token} {example['abstract']}" for example in batch]
+        inputs = _tokenizer(
+            text_batch, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False, max_length=512
+        )
+        inputs = inputs.to(_encoder.device)
+        output = _encoder(**inputs)
+        embeddings.append(output.last_hidden_state[:, 0, :])
+        # Update the progress bar
+        curr_num_embeddings = sum(embedding.size(0) for embedding in embeddings)
+        pbar.progress(
+            curr_num_embeddings / len(articles),
+            text=ptext.format(
+                curr_num_embeddings,
+                len(articles),
+            ),
+        )
+    return torch.cat(embeddings, dim=0)
 
 
 @st.cache_resource(show_spinner=False)
@@ -197,7 +227,7 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
             max_length_reached = True
 
     evidence = [cluster for cluster in evidence if cluster]
-    num_abstracts = sum(len(cluster) for cluster in evidence)
+    # num_abstracts = sum(len(cluster) for cluster in evidence)
 
     # TODO: This extra text is not accounted for in the total length, so it's possible to go over the max length
     return "\n\n".join(f"Cluster {i + 1}\n" + "\n".join(cluster) for i, cluster in enumerate(evidence))
@@ -233,7 +263,6 @@ def main():
         )
         openai_api_key = st.text_input(
             "Enter your API Key:",
-            value=os.environ.get("OPENAI_API_KEY", ""),
             type="password",
             help="Your key for the OpenAI API.",
         )
@@ -261,21 +290,11 @@ def main():
         )
 
         st.subheader("Evidence Clustering")
-        embedder_size = st.selectbox(
-            "Embedder model size",
-            options=["base", "large", "xl"],
-            index=1,
-            format_func=lambda size: f"{size} (recommended)" if size == "large" else size,
-            help=(
-                "The size of the encoder used to produce embeddings for clustering. Larger models tend to perform"
-                " better but are significantly slower."
-            ),
-        )
         threshold = st.slider(
             "Cosine similarity threshold",
-            min_value=0.9,
+            min_value=0.94,
             max_value=1.0,
-            value=0.96,
+            value=0.98,
             help="Titles and abstracts with a cosine similarity >= this value will be clustered",
         )
         min_community_size = st.slider(
@@ -328,6 +347,9 @@ def main():
             " potentially ambiguous names."
         ),
     ).strip()
+
+    # Load the API key from an env var, with the UI taking precedence
+    openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
 
     if not openai_api_key:
         st.warning("Please provide an OpenAI API key in the sidebar.", icon="🔑")
@@ -400,8 +422,8 @@ def main():
 
             if len(articles) >= MIN_ARTICLES_TO_CLUSTER:
                 st.write("Clustering evidence...")
-                encoder = load_encoder(model_size=embedder_size)
-                embeddings = embed_evidence(articles, encoder)
+                encoder, tokenizer = load_encoder()
+                embeddings = embed_evidence(articles, encoder, tokenizer)
                 clusters = sbert_util.community_detection(
                     embeddings, min_community_size=min_community_size, threshold=threshold
                 )
@@ -410,7 +432,7 @@ def main():
                 backoff_threshold = threshold
                 while len(clusters) < MIN_ARTICLES_TO_AVOID_BACKOFF and backoff_threshold > 0.9:
                     backoff_threshold -= BACKOFF_THRESHOLD
-                    st.warning(
+                    st.info(
                         f"No clusters found with threshold {threshold},"
                         f" trying a lower threshold ({backoff_threshold:.2f})...",
                         icon="⚠️",
@@ -548,8 +570,21 @@ Supporting literature:
             status.update(label=f"Generated topic page for '_{entity}_'")
 
         if response:
-            topic_page = f'### {entity}\n\n{response["topic_page"].strip()}'
+            # Basic post-processing
+            topic_page = response["topic_page"].strip()
+            # Remove the entity name if the model provided it
+            topic_page = topic_page.lstrip(entity).lstrip(f"__{entity}__")
+            # Ensure there are only three sections
+            topic_page_sections = topic_page.split("\n\n")
+            if len(topic_page_sections) > 3:
+                topic_page = "\n\n".join(
+                    [topic_page_sections[0].strip(), " ".join(topic_page_sections[1:-1]), topic_page_sections[-1]]
+                )
+
+            # Hyperlink all the in-line citations
             topic_page = replace_pmid_with_markdown_link(topic_page)
+
+            topic_page = f"### {entity}\n\n{topic_page}"
             st.write(topic_page)
 
             # Allow user to download raw markdown formatted topic page
