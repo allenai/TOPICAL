@@ -1,9 +1,13 @@
+import re
 from datetime import datetime
 from typing import NewType
 
 from pydantic import BaseModel, field_validator
 
 EntityMention = NewType("EntityMention", tuple[str, list[tuple[str, float]]])
+
+# RegEx patterns
+cited_pmid = re.compile(r"\[(\d+)\]")  # identify citations in model generated topic page
 
 
 class Date(BaseModel):
@@ -32,3 +36,19 @@ def sanitize_text(text: str, lowercase: bool = False) -> str:
     sanitized_text = " ".join(text.strip().split())
     sanitized_text = sanitized_text.lower() if lowercase else sanitized_text
     return sanitized_text
+
+
+def get_pmids_from_text(text: str) -> list[str]:
+    """Return any PubMed IDs in text.
+
+    Note that this is rather fragile, and will just return any sequence of digits in square brackets ([]).
+    """
+    return cited_pmid.findall(text)
+
+
+def replace_pmids_with_markdown_link(text: str) -> str:
+    """Replace any PubMed IDs in text with a markdown formatted hyperlink to PubMed.
+
+    Note that this is rather fragile, and will just return any sequence of digits in square brackets ([]).
+    """
+    return cited_pmid.sub(r"[\1](https://pubmed.ncbi.nlm.nih.gov/\1)", text)
