@@ -1,6 +1,5 @@
 import os
 import random
-import re
 import urllib.parse
 from datetime import datetime
 from math import sqrt
@@ -16,11 +15,13 @@ from Bio.Entrez.Parser import DictionaryElement
 from lxml import html
 from more_itertools import chunked
 from sentence_transformers import util as sbert_util
-from transformers import AutoAdapterModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer
 
 from topical import nlm, util
 
 # Clustering settings
+SPECTER_MODEL = "allenai/specter2_aug2023refresh_base"  # base specter model to use for embedding
+SPECTER_ADAPTOR = "allenai/specter2_aug2023refresh"  # adaptor to use with chosen specter model
 MIN_ARTICLES_TO_CLUSTER = 100  # If there are less than this number of articles, skip clustering
 MIN_ARTICLES_TO_AVOID_BACKOFF = 2  # If there are less than this number of clusters, perform backoff
 BACKOFF_THRESHOLD = 0.02  # The amount to reduce the cosine similarity by during backoff
@@ -35,9 +36,6 @@ DEBUG_CLUSTER_SIZE = 5  # Size of each cluster to display if debug is True
 
 # Path to the prompts
 PROMPT_DIR = Path(__file__).parents[1] / "prompts"
-
-# RegEx patterns
-cited_pmid = re.compile(r"\[(\d+)\]")  # identify citations in model generated topic page
 
 # Setup Entrez API
 Entrez.email = os.environ.get("ENTREZ_EMAIL")
@@ -124,10 +122,10 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
 def load_encoder():
     """Load an Intructor-based text encoder for embedding titles and abstracts."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = AutoAdapterModel.from_pretrained("allenai/specter2_aug2023refresh_base")
-    _ = model.load_adapter("allenai/specter2_aug2023refresh", source="hf", set_active=True)
+    model = AutoModel.from_pretrained(SPECTER_MODEL)
+    _ = model.load_adapter(SPECTER_ADAPTOR, source="hf", set_active=True)
     model.to(device)
-    tokenizer = AutoTokenizer.from_pretrained("allenai/specter2_base")
+    tokenizer = AutoTokenizer.from_pretrained(SPECTER_MODEL)
     return model, tokenizer
 
 
@@ -237,12 +235,6 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
 def load_llm(model_choice: str):
     """Load an OpenAI large language model."""
     return guidance.llms.OpenAI(model_choice)
-
-
-@st.cache_data(show_spinner=False)
-def replace_pmid_with_markdown_link(text: str) -> str:
-    """Replace any PubMed IDs cited by the model with a markdown formatted hyperlink to PubMed."""
-    return cited_pmid.sub(r"[\1](https://pubmed.ncbi.nlm.nih.gov/\1)", text)
 
 
 def main():
@@ -432,7 +424,7 @@ def main():
                 backoff_threshold = threshold
                 while len(clusters) < MIN_ARTICLES_TO_AVOID_BACKOFF and backoff_threshold > 0.9:
                     backoff_threshold -= BACKOFF_THRESHOLD
-                    st.info(
+                    st.warning(
                         f"No clusters found with threshold {threshold},"
                         f" trying a lower threshold ({backoff_threshold:.2f})...",
                         icon="⚠️",
@@ -459,7 +451,7 @@ def main():
                 )
 
                 if debug:
-                    st.warning(
+                    st.info(
                         f"The first {DEBUG_CLUSTER_SIZE} titles of the first {DEBUG_NUM_CLUSTERS} clusters, useful for"
                         " spot checking the clustering. Clusters are sorted by decreasing size. The first"
                         " element of each cluster is its centroid.\n"
@@ -551,8 +543,8 @@ Supporting literature:
             evidence = format_evidence(articles, clusters, tokenizer, prompt_len)
 
             if debug:
-                st.warning(f"__Evidence__:\n\n{evidence}")
-                st.warning(f"__Prompt__:\n\n{prompt.text}")
+                st.info(f"__Evidence__:\n\n{evidence}")
+                st.info(f"__Prompt__:\n\n{prompt.text}")
 
             with st.spinner("Prompting model..."):
                 response = prompt(
@@ -572,8 +564,6 @@ Supporting literature:
         if response:
             # Basic post-processing
             topic_page = response["topic_page"].strip()
-            # Remove the entity name if the model provided it
-            topic_page = topic_page.lstrip(entity).lstrip(f"__{entity}__")
             # Ensure there are only three sections
             topic_page_sections = topic_page.split("\n\n")
             if len(topic_page_sections) > 3:
@@ -582,8 +572,9 @@ Supporting literature:
                 )
 
             # Hyperlink all the in-line citations
-            topic_page = replace_pmid_with_markdown_link(topic_page)
+            topic_page = util.replace_pmids_with_markdown_link(topic_page)
 
+            # Add a header and display the topic page
             topic_page = f"### {entity}\n\n{topic_page}"
             st.write(topic_page)
 
