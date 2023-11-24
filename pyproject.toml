@@ -1,9 +1,10 @@
 [tool.poetry]
 name = "topical"
 version = "0.1.0"
-description = ""
+description = "A tool for automatically generated topic pages for a broad range of biomedical entities and concepts."
 authors = ["John Giorgi <johnmgiorgi@gmail.com>"]
 readme = "README.md"
+exclude = ["scripts/"]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -30,6 +31,7 @@ mypy = "^1.5.1"
 pytest = "^7.4.2"
 pytest-cov = "^4.1.0"
 hypothesis = "^6.88.3"
+typer = {extras = ["all"], version = "^0.9.0"}
 
 [tool.black]
 # This configuration is adapted from: 
