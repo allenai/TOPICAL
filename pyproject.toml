@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "topical"
 version = "0.1.0"
-description = "A tool for automatically generated topic pages for a broad range of biomedical entities and concepts."
+description = "A tool for automatically generating topic pages for a broad range of biomedical entities and concepts."
 authors = ["John Giorgi <johnmgiorgi@gmail.com>"]
 readme = "README.md"
 exclude = ["scripts/"]

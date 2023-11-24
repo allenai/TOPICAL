@@ -2,7 +2,7 @@
 
 # 🪄📄 TOPICAL: TOPIC pages AutomagicaLly
 
-A tool for automatically generated topic pages for a broad range of biomedical entities and concepts.
+A tool for automatically generating topic pages for a broad range of biomedical entities and concepts.
 
 Live demo coming soon! To run locally, following the instructions below.
 
