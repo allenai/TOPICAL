@@ -593,6 +593,7 @@ Supporting literature:
                         "entity": entity,
                         "topic_page": topic_page,
                         "pubmed_query": esearch_results["QueryTranslation"],
+                        "generated_by": model_choice,
                         "disclaimer": DISCLAIMER,
                     },
                     ensure_ascii=False,
