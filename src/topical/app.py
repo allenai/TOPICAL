@@ -342,7 +342,7 @@ def main():
         help=(
             "Enter a canonicalized name for the entity. This will not be used to query PubMed, but it can help keep"
             " the model on track when generating topic pages, especially in cases where the entity has multiple,"
-            " potentially ambiguous names."
+            " potentially ambiguous names. Defaults to Search query if not provided."
         ),
     ).strip()
 
