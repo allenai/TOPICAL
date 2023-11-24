@@ -137,7 +137,7 @@ def load_encoder():
 
 @torch.no_grad()
 @st.cache_data(show_spinner=False)
-def embed_evidence(articles: list[str], _encoder, _tokenizer, _batch_size: int = 128):
+def embed_evidence(articles: list[str], _encoder, _tokenizer, _batch_size: int = 64):
     """Jointly embed the titles and abstracts in articles for the given encoder."""
     ptext = "{} / {} articles"
     pbar = st.progress(0, text=ptext.format(0, len(articles)))
@@ -335,16 +335,19 @@ def main():
             "Enter a search query for your entity of interest. This supports the full syntax of the [PubMed"
             ' Advanced Search Builder](https://pubmed.ncbi.nlm.nih.gov/advanced/). See "_Search tips_" for more help.'
         ),
-    )
+    ).strip()
     entity = st.text_input(
         "Canonicalized name",
         value="Microplastics",
         help=(
             "Enter a canonicalized name for the entity. This will not be used to query PubMed, but it can help keep"
             " the model on track when generating topic pages, especially in cases where the entity has multiple,"
-            " potentially ambiguous names."
+            " potentially ambiguous names. Defaults to Search query if not provided."
         ),
     ).strip()
+
+    # Default to using the search query
+    entity = entity or query
 
     # Load the API key from an env var, with the UI taking precedence
     openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
@@ -596,10 +599,11 @@ Supporting literature:
                     indent=4,
                 )
 
+            file_name = util.sanitize_text(entity, lowercase=True).replace(" ", "_").replace("-", "_").replace(",", "")
             st.download_button(
                 "Download topic page",
                 data=prepare_topic_page_for_download(),
-                file_name=f'{util.sanitize_text(entity, lowercase=True).replace(" ", "_")}.json',
+                file_name=f"{file_name}.json",
                 help="Download a JSON file containing the markdown formatted topic page and additional metadata.",
             )
 

@@ -79,9 +79,9 @@ def test_replace_pmids_with_markdown_link() -> None:
     )
 
     # Exampe with digits in square brackets
-    assert (
-        util.replace_pmids_with_markdown_link(
-            "This is an example that contains digits, like [1] or [123], within square brackets."
-        )
-        == "This is an example that contains digits, like [1](https://pubmed.ncbi.nlm.nih.gov/1) or [123](https://pubmed.ncbi.nlm.nih.gov/123), within square brackets."
+    assert util.replace_pmids_with_markdown_link(
+        "This is an example that contains digits, like [1] or [123], within square brackets."
+    ) == (
+        "This is an example that contains digits, like [1](https://pubmed.ncbi.nlm.nih.gov/1) or"
+        " [123](https://pubmed.ncbi.nlm.nih.gov/123), within square brackets."
     )
