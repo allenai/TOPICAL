@@ -15,6 +15,10 @@ from typing_extensions import Annotated
 
 from topical import nlm, util
 
+# URLs we need to reference
+PUBMED_URL = "https://pubmed.ncbi.nlm.nih.gov/?term={}"
+MESH_URL = "https://meshb.nlm.nih.gov/record/ui?ui={}"
+
 # Setup Entrez API
 Entrez.email = os.environ.get("ENTREZ_EMAIL")
 Entrez.api_key = os.environ.get("ENTREZ_API_KEY")
@@ -48,6 +52,9 @@ def main(
         definition, main_content, future_directions = body.split("\n\n")
         pubmed_query = topic_page["pubmed_query"].strip()
 
+        # Replace the PubMed query with a markdown formatted hyperlink to PubMed
+        pubmed_query = f"[{pubmed_query}]({PUBMED_URL.format(urllib.parse.quote(pubmed_query))})"
+
         # Randomly select a PMID to evaluate for use in task 2
         definition_pmids = util.get_pmids_from_text(definition)
         main_content_pmids = util.get_pmids_from_text(main_content)
@@ -68,8 +75,8 @@ def main(
             f"https://id.nlm.nih.gov/mesh/lookup/descriptor?label={url_encoded_title}&match=exact&limit=1"
         )
         r.raise_for_status()
-        mesh_url = r.json()[0]["resource"]
-        mesh_id = mesh_url.split("/")[-1]
+        mesh_id = r.json()[0]["resource"].split("/")[-1]
+        mesh_url = f"[{mesh_id}]({MESH_URL.format(mesh_id)})"
 
         # Get the title and abstract of the article
         article = nlm.efetch(pmid, db="pubmed", rettype="abstract", retmax=1, use_cache=True)["PubmedArticle"][0][
