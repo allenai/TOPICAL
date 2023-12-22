@@ -1,21 +1,29 @@
 import logging
 import os
 import re
+import xml.etree.ElementTree as ET
+from datetime import datetime
 from typing import Any, Callable, Iterator
 
+import requests
 from Bio import Entrez
+from cached_path import cached_path
 from diskcache import Cache
+from pydantic import BaseModel
 
+from topical import util
 from topical.common import get_cache_dir
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
+# Set up constants
+MESH_LATEST_URL = "https://nlmpubs.nlm.nih.gov/projects/mesh/MESH_FILES/xmlmesh/desc{}.xml"
 # We give these their own cache directories so that we can clear them separately if things get corrupted
 ENTREZ_CACHE_DIR = get_cache_dir() / "entrez"
 EFETCH_CACHE_DIR = ENTREZ_CACHE_DIR / "efetch"
 ESEARCH_CACHE_DIR = ENTREZ_CACHE_DIR / "esearch"
-
+MESH_CACHE_DIR = get_cache_dir() / "mesh"
 
 # Complile any regular expressions
 date_regex = re.compile(r"\b\d{4}\b")  # match exactly four digits
@@ -27,6 +35,37 @@ if Entrez.email:
     logger.info(f"Found ENTREZ_EMAIL environment variable: {Entrez.email}")
 if Entrez.api_key:
     logger.info(f"Found ENTREZ_API_KEY environment variable: {Entrez.api_key}")
+
+
+class MeSHDescriptor(BaseModel):
+    ui: str
+    class_: str
+    name: str
+    date_created: util.Date
+    date_revised: util.Date | None = None
+    date_established: util.Date
+    tree_numbers: list[str]
+
+    def max_tree_depth(self) -> int | None:
+        """Returns the maximum depth of this descriptor in the tree"""
+
+        # For whatever reason, both "Male" and "Female" have no tree numbers, but are pretty clearly a depth of 2
+        # So we handle these cases manually
+        if self.ui == "D005260" or self.ui == "D008297":
+            return 2
+        return max(len(tree_num.split(".")) for tree_num in self.tree_numbers)
+
+
+def _fetch_latest_year() -> int:
+    """Fetches the latest year of MeSH from the NLM website. Note, this requires an active internet connection."""
+    year = datetime.today().year
+    while True:
+        url = MESH_LATEST_URL.format(year)
+        request = requests.head(url)
+        request.raise_for_status()
+        if request.status_code == 200:
+            return year
+        year -= 1
 
 
 def get_year_from_medline_date(medline_date: str) -> str | None:
@@ -154,3 +193,55 @@ def esearch(
 
     if cache is not None:
         cache.close()
+
+
+def fetch_mesh(year: int | None = None, **kwargs) -> Iterator[MeSHDescriptor]:
+    """Fetch and parse the National Library of Medicine (NLM) MeSH Descriptors for a given year.
+
+    Note that descriptors are cumulative. To get all current descriptors, specify the latest year. If no year is
+    specified, the current year will be used. Downloading the descriptors can take upwards of 10 minutes (depending
+    on your internet connection and speed). Subsequent calls for the same year will be faster, as downloaded
+    descriptors are cached. See https://www.nlm.nih.gov/mesh/xml_data_elements.html for a description of the fields.
+
+    Args:
+        year (int, optional): Year to fetch descriptors for (defaults to current year). Note: descriptors are cumulative.
+        kwargs: Keyword arguments to pass to `cached_path`.
+    Returns:
+        Iterator[MeSHDescriptor]: A generator of `MeSHDescriptor`'s, each of which represents a single descriptor.
+    """
+    year = year or _fetch_latest_year()
+    # Download and cache the latest version of the MeSH XML file containing SCPs
+    fp = cached_path(MESH_LATEST_URL.format(year), cache_dir=MESH_CACHE_DIR, **kwargs)
+    # Parse the resulting XML file into a dictionary and yield it
+    # NOTE: This does not include all fields, and may need to be extended in the future
+    context = ET.iterparse(fp, events=("end",))
+    for event, elem in context:
+        if elem.tag == "DescriptorRecord" and event == "end":
+            record_dict = {}
+            record_dict["ui"] = elem.find("DescriptorUI").text
+            record_dict["class_"] = elem.get("DescriptorClass")
+            record_dict["name"] = elem.find("DescriptorName/String").text
+            record_dict["date_created"] = {
+                "year": elem.find("DateCreated/Year").text,
+                "month": elem.find("DateCreated/Month").text,
+                "day": elem.find("DateCreated/Day").text,
+            }
+            if elem.find("date_revised") is not None:
+                record_dict["DateRevised"] = {
+                    "year": elem.find("DateRevised/Year").text,
+                    "month": elem.find("DateRevised/Month").text,
+                    "day": elem.find("DateRevised/Day").text,
+                }
+            if elem.find("DateEstablished") is not None:
+                record_dict["date_established"] = {
+                    "year": elem.find("DateEstablished/Year").text,
+                    "month": elem.find("DateEstablished/Month").text,
+                    "day": elem.find("DateEstablished/Day").text,
+                }
+
+            record_dict["tree_numbers"] = [tree.text for tree in elem.findall("TreeNumberList/TreeNumber")]
+
+            yield MeSHDescriptor(**record_dict)
+
+            # This is important! It allows the memory occupied by the element to be freed.
+            elem.clear()
