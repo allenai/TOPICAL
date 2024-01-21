@@ -25,6 +25,7 @@ EFETCH_CACHE_DIR = ENTREZ_CACHE_DIR / "efetch"
 ESEARCH_CACHE_DIR = ENTREZ_CACHE_DIR / "esearch"
 MESH_CACHE_DIR = get_cache_dir() / "mesh"
 
+
 # Complile any regular expressions
 date_regex = re.compile(r"\b\d{4}\b")  # match exactly four digits
 
