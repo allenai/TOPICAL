@@ -13,6 +13,8 @@ import torch
 import ujson as json
 from Bio import Entrez
 from Bio.Entrez.Parser import DictionaryElement
+from guidance import assistant, gen, system, user
+from guidance.models import OpenAICompletion
 from lxml import html
 from more_itertools import chunked
 from sentence_transformers import util as sbert_util
@@ -33,7 +35,7 @@ MIN_ARTICLES_TO_AVOID_BACKOFF = 2  # If there are less than this number of clust
 BACKOFF_THRESHOLD = 0.02  # The amount to reduce the cosine similarity by during backoff
 
 # Prompt settings
-MODEL_MAX_LEN = 8000  # TODO: Artifically low because some prompt tokens are not accounted for in the total length
+MODEL_MAX_LEN = 8100  # TODO: Artifically low because some prompt tokens are not accounted for in the total length
 TOPIC_PAGE_MAX_LEN = 512
 
 # Debug settings
@@ -50,7 +52,7 @@ Entrez.api_key = os.environ.get("ENTREZ_API_KEY")
 random.seed(42)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=5)
 def plot_publications_per_year(records: DictionaryElement, end_year: str) -> dict[str, int]:
     """Plots a histogram of publications per year (up to an including end_year) in records and returns the counts."""
     pub_years = [int(nlm.get_year_from_medline_date(record["PubDate"])) for record in records]
@@ -65,7 +67,7 @@ def plot_publications_per_year(records: DictionaryElement, end_year: str) -> dic
     return year_counts
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=5)
 def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str | dict[str, str]]]:
     """Performs basic pre-processing of the articles in records and returns them as a list of dictionaries."""
     ptext = "{} / {} articles"
@@ -126,7 +128,7 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
 
 @st.cache_resource(show_spinner="Loading encoder...")
 def load_encoder():
-    """Load an Intructor-based text encoder for embedding titles and abstracts."""
+    """Load an SPECTER-based text encoder for embedding titles and abstracts."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModel.from_pretrained(SPECTER_MODEL)
     _ = model.load_adapter(SPECTER_ADAPTOR, source="hf", set_active=True)
@@ -136,7 +138,7 @@ def load_encoder():
 
 
 @torch.no_grad()
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=5)
 def embed_evidence(articles: list[str], _encoder, _tokenizer, _batch_size: int = 64):
     """Jointly embed the titles and abstracts in articles for the given encoder."""
     ptext = "{} / {} articles"
@@ -169,7 +171,7 @@ def load_tiktokenizer(model_choice: str):
     return tiktoken.encoding_for_model(model_choice)
 
 
-@st.cache_data
+@st.cache_data(max_entries=5)
 def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _tokenizer, prompt_len: int) -> str:
     """Format the supporting literature as a string for inclusion in the prompt."""
     curr_evidence_len = 0
@@ -231,7 +233,6 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
             max_length_reached = True
 
     evidence = [cluster for cluster in evidence if cluster]
-    # num_abstracts = sum(len(cluster) for cluster in evidence)
 
     # TODO: This extra text is not accounted for in the total length, so it's possible to go over the max length
     return "\n\n".join(f"Cluster {i + 1}\n" + "\n".join(cluster) for i, cluster in enumerate(evidence))
@@ -240,7 +241,7 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
 @st.cache_resource(show_spinner=False)
 def load_llm(model_choice: str):
     """Load an OpenAI large language model."""
-    return guidance.llms.OpenAI(model_choice)
+    return guidance.models.OpenAI(model_choice, echo=False, caching=True, max_streaming_tokens=TOPIC_PAGE_MAX_LEN)
 
 
 def main():
@@ -287,13 +288,22 @@ def main():
             help="Determines the maximium number of papers to consider, starting from most to least relevant.",
         )
 
-        st.subheader("Evidence Clustering")
+        st.subheader("Clustering")
+        enable_clustering = st.toggle(
+            "Cluster search results",
+            value=torch.cuda.is_available(),
+            help=(
+                "True if search results should be clustered before sampling."
+                " Will be automatically disabled if no GPU is available."
+            ),
+        )
         threshold = st.slider(
             "Cosine similarity threshold",
             min_value=0.92,
             max_value=1.0,
             value=0.96,
             help="Titles and abstracts with a cosine similarity >= this value will be clustered",
+            disabled=not enable_clustering,
         )
         min_community_size = st.slider(
             "Minimum cluster size",
@@ -301,6 +311,7 @@ def main():
             max_value=10,
             value=5,
             help="Clusters smaller than this value will be discarded",
+            disabled=not enable_clustering,
         )
 
         "---"
@@ -359,8 +370,11 @@ def main():
     # Any key provided in the sidebar will override the environment variable
     os.environ["OPENAI_API_KEY"] = openai_api_key
 
+    if enable_clustering and not torch.cuda.is_available():
+        st.warning("Clustering is enabled but no GPU detected. Expect things to be painfully slow", icon="🐢")
+
     if st.button("Generate Topic Page", type="primary"):
-        with st.status(f"Generating topic page for _{entity}_...", expanded=debug) as status:
+        with st.status(f"Generating topic page for _{entity}_...", expanded=debug):
             if debug:
                 st.info("Debug mode is enabled, additional information will be displayed in blue.", icon="🐛")
 
@@ -421,7 +435,12 @@ def main():
                 )
                 st.stop()
 
-            if len(articles) >= MIN_ARTICLES_TO_CLUSTER:
+            # Default clusters are no clusters
+            clusters = None
+
+            if not enable_clustering:
+                st.warning("Clustering disabled. Expect faster responses but worse quality results.", icon="⚠️")
+            elif enable_clustering and len(articles) >= MIN_ARTICLES_TO_CLUSTER:
                 st.write("Clustering evidence...")
                 encoder, tokenizer = load_encoder()
                 embeddings = embed_evidence(articles, encoder, tokenizer)
@@ -443,18 +462,13 @@ def main():
                     )
 
                 if not clusters:
-                    st.warning(
-                        "No clusters found for your query. Try relaxing the clustering criteria, or adding terms"
-                        " to the query.",
-                        icon="😔",
-                    )
-                    st.stop()
+                    st.warning("No clusters found for your query. Randomly sampling articles instead", icon="⚠️")
 
-                DEBUG_NUM_CLUSTERS = len(max(clusters, key=len))
+                max_cluster_size = len(max(clusters, key=len))
                 min_cluster_size = len(min(clusters, key=len))
                 avg_cluster_size = sum(len(cluster) for cluster in clusters) / len(clusters)
                 st.success(
-                    f"Found {len(clusters)} clusters (max size: {DEBUG_NUM_CLUSTERS}, min size:"
+                    f"Found {len(clusters)} clusters (max size: {max_cluster_size}, min size:"
                     f" {min_cluster_size}, mean size: {avg_cluster_size:.1f}) matching your query",
                     icon="✅",
                 )
@@ -474,7 +488,8 @@ def main():
                 st.warning(
                     f"Less than {MIN_ARTICLES_TO_CLUSTER} total publications found, skipping clustering...", icon="⚠️"
                 )
-                clusters = [[i] for i in range(len(articles))]
+
+            clusters = clusters or [[i] for i in range(len(articles))]
 
             # Design a prompt to get GPT to generate topic pages
             system_prompt = (PROMPT_DIR / "system.txt").read_text().format(domain="biomedical").strip()
@@ -491,70 +506,64 @@ def main():
                 (PROMPT_DIR / "how_to_cite.txt").read_text().format(id_database="PubMed", id_type="PMID")
             ).strip()
             topic_page_prompt = (PROMPT_DIR / "topic_page.txt").read_text().strip()
-
-            llm = load_llm(model_choice)
-            prompt = guidance(
-                """
-{{#system~}}
-{{system_prompt}}
-{{~/system}}
-
-{{#user~}}
-# INSTRUCTIONS
-
-{{instructions_prompt}}
-
-## HOW TO CITE YOUR CLAIMS
-
-{{how_to_cite_prompt}}
-
-# ENTITY OR CONCEPT
-
-Canonicalized entity name: {{canonicalized_entity_name}}
-Publications per year: {{publications_per_year}}
-Total number of publications: {{total_publications}}
-Supporting literature:
-
-{{evidence}}
-
-# TOPIC PAGE
-
-{{topic_page_prompt}}
-{{~/user}}
-
-{{#assistant~}}
-{{gen 'topic_page' temperature=0.0 max_tokens=512}}
-{{~/assistant}}
-        """,
-                llm=llm,
-                silent=True,
-                stream=False,
-                caching=True,
-            )
-
-            # Format evidence
-            tokenizer = load_tiktokenizer(model_choice)
             publications_per_year = ", ".join(
                 f"{year}: {count}" for year, count in year_counts.items() if int(year) <= int(end_year)
             )
 
-            # TODO: Is there no way to format the entire prompt and get its length together?
-            prompt_len = (
-                len(tokenizer.encode(prompt.text))
-                + len(tokenizer.encode(publications_per_year))
-                + len(tokenizer.encode(str(total_publications)))
-                + len(tokenizer.encode(system_prompt))
-                + len(tokenizer.encode(instructions_prompt))
-                + len(tokenizer.encode(how_to_cite_prompt))
-                + len(tokenizer.encode(topic_page_prompt))
-                + len(tokenizer.encode(entity))
+            def prompt(
+                *,
+                system_prompt: str,
+                instructions_prompt: str,
+                how_to_cite_prompt: str,
+                total_publications: str,
+                canonicalized_entity_name: str,
+                publications_per_year: str,
+                evidence: str,
+                topic_page_prompt: str,
+                llm: OpenAICompletion,
+                generate=True,
+            ) -> str:
+                with system():
+                    response = llm + system_prompt
+                with user():
+                    response += f"# INSTRUCTIONS\n\n{instructions_prompt}\n\n"
+                    response += f"## HOW TO CITE YOUR CLAIMS\n\n{how_to_cite_prompt}\n\n"
+                    response += (
+                        f"# ENTITY OR CONCEPT\n\n"
+                        f"Canonicalized entity name:{canonicalized_entity_name}\n"
+                        f"Publications per year: {publications_per_year}\n"
+                        f"Total number of publications: {total_publications}\n"
+                        f"Supporting literature:\n\n{evidence}\n\n"
+                    )
+                    response += f"# TOPIC PAGE\n\n{topic_page_prompt}\n\n"
+
+                if generate:
+                    with assistant():
+                        response += gen("topic_page", temperature=0.0, max_tokens=TOPIC_PAGE_MAX_LEN)
+
+                return response
+
+            llm = load_llm(model_choice)
+            tokenizer = load_tiktokenizer(model_choice)
+
+            # Get length of prompt without evidence (and without generating) so we can format the evidence
+            response = prompt(
+                system_prompt=system_prompt,
+                instructions_prompt=instructions_prompt,
+                how_to_cite_prompt=how_to_cite_prompt,
+                topic_page_prompt=topic_page_prompt,
+                canonicalized_entity_name=entity,
+                publications_per_year=publications_per_year,
+                total_publications=total_publications,
+                evidence="",
+                llm=llm,
+                generate=False,
             )
+
+            prompt_len = len(tokenizer.encode(response._current_prompt()))
             evidence = format_evidence(articles, clusters, tokenizer, prompt_len)
 
-            if debug:
-                st.info(f"__Evidence__:\n\n{evidence}")
-                st.info(f"__Prompt__:\n\n{prompt.text}")
-
+            # Actually make the request to the API
             with st.spinner("Prompting model..."):
                 response = prompt(
                     system_prompt=system_prompt,
@@ -566,9 +575,12 @@ Supporting literature:
                     total_publications=total_publications,
                     evidence=evidence,
                     llm=llm,
+                    generate=True,
                 )
 
-            status.update(label=f"Generated topic page for '_{entity}_'")
+        if debug:
+            st.info(f"__Evidence__:\n\n{evidence}")
+            st.info(f"__Prompt__:\n\n{response._current_prompt()}")
 
         if response:
             # Basic post-processing
