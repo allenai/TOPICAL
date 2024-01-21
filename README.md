@@ -2,7 +2,7 @@
 
 # 🪄📄 TOPICAL: TOPIC pages AutomagicaLly
 
-A tool for automatically generated topic pages for a broad range of biomedical entities and concepts.
+A tool for automatically generating topic pages for a broad range of biomedical entities and concepts.
 
 Live demo coming soon! To run locally, following the instructions below.
 
@@ -58,19 +58,3 @@ streamlit run src/topical/app.py
 > __Note__
 > `ENTREZ_EMAIL` and `ENTREZ_API_KEY` are optional but highly recommended. You can get an Entrez API key [here](https://ncbiinsights.ncbi.nlm.nih.gov/new-api-keys-for-the-e-utilities/).
 > An OpenAI API key is required. You can provide it in the UI or via the `OPENAI_API_KEY` environment variable, with the UI taking precedence.
-
-### Human evaluation
-
-To reproduce our sampling of biomedical entities for human evaluation, run:
-
-```python
-import random
-
-from topical import nlm
-
-descriptors = {
-    descr.ui: descr
-    for descr in nlm.fetch_mesh()
-    if int(descr.date_created.year) >= 2013 and descr.max_tree_depth() >= 7
-}
-```
