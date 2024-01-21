@@ -7,10 +7,9 @@ readme = "README.md"
 exclude = ["scripts/"]
 
 [tool.poetry.dependencies]
-python = "^3.11"
-streamlit = "^1.26.0"
-guidance = "^0.0.64"
-openai = "<1.0.0"
+python = ">=3.11,<3.12"
+streamlit = "^1.30.0"
+guidance = "^0.1.10"
 nltk = "^3.8.1"
 biopython = "^1.81"
 sentence-transformers = "^2.2.2"

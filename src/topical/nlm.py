@@ -25,6 +25,7 @@ EFETCH_CACHE_DIR = ENTREZ_CACHE_DIR / "efetch"
 ESEARCH_CACHE_DIR = ENTREZ_CACHE_DIR / "esearch"
 MESH_CACHE_DIR = get_cache_dir() / "mesh"
 
+
 # Complile any regular expressions
 date_regex = re.compile(r"\b\d{4}\b")  # match exactly four digits
 
@@ -204,7 +205,7 @@ def fetch_mesh(year: int | None = None, **kwargs) -> Iterator[MeSHDescriptor]:
     descriptors are cached. See https://www.nlm.nih.gov/mesh/xml_data_elements.html for a description of the fields.
 
     Args:
-        year (int, optional): Year to fetch descriptors for (defaults to current year). Note: descriptors are cumulative.
+        year (int, optional): Year to fetch descriptors (defaults to current year). Note: descriptors are cumulative.
         kwargs: Keyword arguments to pass to `cached_path`.
     Returns:
         Iterator[MeSHDescriptor]: A generator of `MeSHDescriptor`'s, each of which represents a single descriptor.
