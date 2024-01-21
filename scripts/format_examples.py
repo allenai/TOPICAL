@@ -34,7 +34,7 @@ def main(
 ) -> None:
     """Format the task 1 and task 2 inputs of the human evaluation for easy copy-pasting into the Google Sheet.
 
-    Note, you will likely want to provide your Entrez email and API key via the ENTREZ_EMAIL and ENTREZ_API_KEY env vars.
+    Note, you should provide your Entrez email and API key via the ENTREZ_EMAIL and ENTREZ_API_KEY env vars.
     """
     if output_dir is None:
         output_dir = input_dir
