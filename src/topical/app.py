@@ -30,12 +30,12 @@ DISCLAIMER = (
 # Clustering settings
 SPECTER_MODEL = "allenai/specter2_aug2023refresh_base"  # base specter model to use for embedding
 SPECTER_ADAPTOR = "allenai/specter2_aug2023refresh"  # adaptor to use with chosen specter model
+ENCODER_MAX_LEN = 512  # Maximum number of tokens to pass to the encoder
 MIN_ARTICLES_TO_CLUSTER = 100  # If there are less than this number of articles, skip clustering
 MIN_ARTICLES_TO_AVOID_BACKOFF = 2  # If there are less than this number of clusters, perform backoff
 BACKOFF_THRESHOLD = 0.02  # The amount to reduce the cosine similarity by during backoff
 
 # Prompt settings
-MODEL_MAX_LEN = 16_000
 TOPIC_PAGE_MAX_LEN = 512
 
 # Debug settings
@@ -139,19 +139,26 @@ def load_encoder():
 
 @torch.no_grad()
 @st.cache_data(show_spinner=False, max_entries=5)
-def embed_evidence(articles: list[str], _encoder, _tokenizer, _batch_size: int = 32):
+def embed_evidence(articles: list[str], model: str, _batch_size: int = 32):
     """Jointly embed the titles and abstracts in articles for the given encoder."""
+    encoder, tokenizer = load_encoder()
+
     ptext = "{} / {} articles"
     pbar = st.progress(0, text=ptext.format(0, len(articles)))
 
     embeddings = []
     for batch in chunked(articles, _batch_size):
-        text_batch = [f"{example['title']} {_tokenizer.sep_token} {example['abstract']}" for example in batch]
-        inputs = _tokenizer(
-            text_batch, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False, max_length=512
+        text_batch = [f"{example['title']} {tokenizer.sep_token} {example['abstract']}" for example in batch]
+        inputs = tokenizer(
+            text_batch,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            return_token_type_ids=False,
+            max_length=ENCODER_MAX_LEN,
         )
-        inputs = inputs.to(_encoder.device)
-        output = _encoder(**inputs)
+        inputs = inputs.to(encoder.device)
+        output = encoder(**inputs)
         embeddings.append(output.last_hidden_state[:, 0, :])
         # Update the progress bar
         curr_num_embeddings = sum(embedding.size(0) for embedding in embeddings)
@@ -172,8 +179,12 @@ def load_tiktokenizer(model_choice: str):
 
 
 @st.cache_data(show_spinner=False, max_entries=5)
-def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _tokenizer, prompt_len: int) -> str:
+def format_evidence(
+    articles: list[dict[str, str]], clusters: list[list[int]], model: str, model_max_context: str, prompt_len: int
+) -> str:
     """Format the supporting literature as a string for inclusion in the prompt."""
+    tokenizer = load_tiktokenizer(model)
+
     curr_evidence_len = 0
     evidence = [[] for _ in clusters]
     max_length_reached = False
@@ -208,8 +219,8 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
         formatted_article = _format_article(articles[article_idx])
         if not formatted_article:
             continue
-        formatted_article_len = len(_tokenizer.encode(formatted_article))
-        if (curr_evidence_len + formatted_article_len) < (MODEL_MAX_LEN - prompt_len - TOPIC_PAGE_MAX_LEN):
+        formatted_article_len = len(tokenizer.encode(formatted_article))
+        if (curr_evidence_len + formatted_article_len) < (model_max_context - prompt_len - TOPIC_PAGE_MAX_LEN):
             curr_evidence_len += formatted_article_len
             evidence[cluster_idx].append(formatted_article)
         else:
@@ -225,8 +236,8 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
         formatted_article = _format_article(articles[article_idx])
         if not formatted_article:
             continue
-        formatted_article_len = len(_tokenizer.encode(formatted_article))
-        if (curr_evidence_len + formatted_article_len) < (MODEL_MAX_LEN - prompt_len - TOPIC_PAGE_MAX_LEN):
+        formatted_article_len = len(tokenizer.encode(formatted_article))
+        if (curr_evidence_len + formatted_article_len) < (model_max_context - prompt_len - TOPIC_PAGE_MAX_LEN):
             curr_evidence_len += formatted_article_len
             evidence[cluster_idx].append(formatted_article)
         else:
@@ -294,10 +305,23 @@ def main():
             value="gpt-4-1106-preview",
             help="Any valid model name for the OpenAI API. It is strongly recommended to use a GPT-4 class model.",
         )
+        model_max_context = st.number_input(
+            "Maximum input tokens:",
+            max_value=16_384,
+            value=16_384,
+            help=(
+                "The maximum number of tokens to allow for the model inputs (minus the prompt plus generated text)."
+                " We will pass as many titles and abstracts to the model as possible, given this limit."
+                " Roughly speaking, 1 title + abstract consumes about 512 tokens.\n\n"
+                " __Note__: You are responsible for ensuring this value is within the limits of the model you choose"
+                " (see https://platform.openai.com/docs/models/ for details)."
+                " Setting a value larger than a models maximum context length will result in an error."
+            ),
+        )
         openai_api_key = st.text_input(
             "Enter your API Key:",
             type="password",
-            help="Your key for the OpenAI API.",
+            help="Your key for the OpenAI API. Only required if you are running locally.",
         )
 
         "---"
@@ -316,7 +340,7 @@ def main():
         retmax = st.number_input(
             "Maximum papers to consider",
             min_value=1,
-            max_value=5000,
+            max_value=10_000,
             value=2500,
             step=100,
             help=("Determines the maximum number of papers to consider, starting from most to least relevant."),
@@ -336,7 +360,7 @@ def main():
             min_value=0.92,
             max_value=1.0,
             value=0.96,
-            help="Titles and abstracts with a cosine similarity >= this value will be clustered",
+            help="Titles and abstracts with a cosine similarity >= this value will be clustered.",
             disabled=not enable_clustering,
         )
         min_community_size = st.slider(
@@ -344,7 +368,7 @@ def main():
             min_value=1,
             max_value=10,
             value=5,
-            help="Clusters smaller than this value will be discarded",
+            help="Clusters smaller than this value will be discarded.",
             disabled=not enable_clustering,
         )
 
@@ -486,8 +510,7 @@ def main():
                 st.warning("Clustering disabled. Expect faster responses but worse quality results.", icon="⚠️")
             elif enable_clustering and len(articles) >= MIN_ARTICLES_TO_CLUSTER:
                 st.write("Clustering evidence...")
-                encoder, tokenizer = load_encoder()
-                embeddings = embed_evidence(articles, encoder, tokenizer)
+                embeddings = embed_evidence(articles, model=SPECTER_MODEL)
                 clusters = sbert_util.community_detection(
                     embeddings, min_community_size=min_community_size, threshold=threshold
                 )
@@ -568,7 +591,9 @@ def main():
             )
 
             prompt_len = len(tokenizer.encode(response._current_prompt()))
-            evidence = format_evidence(articles, clusters, tokenizer, prompt_len)
+            evidence = format_evidence(
+                articles, clusters, model=model_choice, model_max_context=model_max_context, prompt_len=prompt_len
+            )
 
             # Actually make the request to the API
             with st.spinner("Prompting model..."):
