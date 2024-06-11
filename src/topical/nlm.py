@@ -108,7 +108,7 @@ def efetch(queries: str | list[str], *, use_cache: bool = False, **kwargs) -> st
     """
     # Pop any kwargs we would like to have defaults for. We set more patient defaults than the Entrez API.
     max_tries = kwargs.pop("max_tries", None) or 5
-    sleep_between_tries = kwargs.pop("sleep_between_tries", None) or 30
+    sleep_between_tries = kwargs.pop("sleep_between_tries", None) or 15
 
     def _efetch(queries: str | list[str]) -> str:
         handle = Entrez.efetch(id=queries, max_tries=max_tries, sleep_between_tries=sleep_between_tries, **kwargs)
@@ -165,7 +165,7 @@ def esearch(
     """
     # Pop any kwargs we would like to have defaults for. We set more patient defaults than the Entrez API.
     max_tries = kwargs.pop("max_tries", None) or 5
-    sleep_between_tries = kwargs.pop("sleep_between_tries", None) or 30
+    sleep_between_tries = kwargs.pop("sleep_between_tries", None) or 15
 
     if isinstance(queries, str):
         queries = [queries]

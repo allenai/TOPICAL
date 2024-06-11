@@ -1,4 +1,4 @@
-Every specific scientific claim in the topic page should be followed by an in-line citation to {id_database} using the provided {id_type}s. E.g. for a {id_type} of 12345678, format each citation like: "first identified in YYYY ([12345678])...".
+Every specific scientific claim in the topic page should be followed by an in-line citation to PubMed using the provided PMIDs. E.g. for a PMID of 12345678, format each citation like: "first identified in YYYY ([12345678])...".
 
 Use this syntax and URL EXACTLY. DO NOT under any circumstance format citations differently, e.g. DO NOT place them in an appendix or footnotes section and DO NOT use this syntax: [^1^], which you like to do.
 

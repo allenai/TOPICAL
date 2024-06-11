@@ -14,7 +14,7 @@ import ujson as json
 from Bio import Entrez
 from Bio.Entrez.Parser import DictionaryElement
 from guidance import assistant, gen, system, user
-from guidance.models import OpenAICompletion
+from guidance.models import OpenAI
 from lxml import html
 from more_itertools import chunked
 from sentence_transformers import util as sbert_util
@@ -30,12 +30,12 @@ DISCLAIMER = (
 # Clustering settings
 SPECTER_MODEL = "allenai/specter2_aug2023refresh_base"  # base specter model to use for embedding
 SPECTER_ADAPTOR = "allenai/specter2_aug2023refresh"  # adaptor to use with chosen specter model
+ENCODER_MAX_LEN = 512  # Maximum number of tokens to pass to the encoder
 MIN_ARTICLES_TO_CLUSTER = 100  # If there are less than this number of articles, skip clustering
 MIN_ARTICLES_TO_AVOID_BACKOFF = 2  # If there are less than this number of clusters, perform backoff
 BACKOFF_THRESHOLD = 0.02  # The amount to reduce the cosine similarity by during backoff
 
 # Prompt settings
-MODEL_MAX_LEN = 8100  # TODO: Artifically low because some prompt tokens are not accounted for in the total length
 TOPIC_PAGE_MAX_LEN = 512
 
 # Debug settings
@@ -126,7 +126,7 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
     return articles
 
 
-@st.cache_resource(show_spinner="Loading encoder...")
+@st.cache_resource(show_spinner=False)
 def load_encoder():
     """Load an SPECTER-based text encoder for embedding titles and abstracts."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -139,19 +139,26 @@ def load_encoder():
 
 @torch.no_grad()
 @st.cache_data(show_spinner=False, max_entries=5)
-def embed_evidence(articles: list[str], _encoder, _tokenizer, _batch_size: int = 64):
+def embed_evidence(articles: list[str], model: str, _batch_size: int = 32):
     """Jointly embed the titles and abstracts in articles for the given encoder."""
+    encoder, tokenizer = load_encoder()
+
     ptext = "{} / {} articles"
     pbar = st.progress(0, text=ptext.format(0, len(articles)))
 
     embeddings = []
     for batch in chunked(articles, _batch_size):
-        text_batch = [f"{example['title']} {_tokenizer.sep_token} {example['abstract']}" for example in batch]
-        inputs = _tokenizer(
-            text_batch, padding=True, truncation=True, return_tensors="pt", return_token_type_ids=False, max_length=512
+        text_batch = [f"{example['title']} {tokenizer.sep_token} {example['abstract']}" for example in batch]
+        inputs = tokenizer(
+            text_batch,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+            return_token_type_ids=False,
+            max_length=ENCODER_MAX_LEN,
         )
-        inputs = inputs.to(_encoder.device)
-        output = _encoder(**inputs)
+        inputs = inputs.to(encoder.device)
+        output = encoder(**inputs)
         embeddings.append(output.last_hidden_state[:, 0, :])
         # Update the progress bar
         curr_num_embeddings = sum(embedding.size(0) for embedding in embeddings)
@@ -171,9 +178,13 @@ def load_tiktokenizer(model_choice: str):
     return tiktoken.encoding_for_model(model_choice)
 
 
-@st.cache_data(max_entries=5)
-def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _tokenizer, prompt_len: int) -> str:
+@st.cache_data(show_spinner=False, max_entries=5)
+def format_evidence(
+    articles: list[dict[str, str]], clusters: list[list[int]], model: str, model_max_context: str, prompt_len: int
+) -> str:
     """Format the supporting literature as a string for inclusion in the prompt."""
+    tokenizer = load_tiktokenizer(model)
+
     curr_evidence_len = 0
     evidence = [[] for _ in clusters]
     max_length_reached = False
@@ -208,8 +219,8 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
         formatted_article = _format_article(articles[article_idx])
         if not formatted_article:
             continue
-        formatted_article_len = len(_tokenizer.encode(formatted_article))
-        if (curr_evidence_len + formatted_article_len) < (MODEL_MAX_LEN - prompt_len - TOPIC_PAGE_MAX_LEN):
+        formatted_article_len = len(tokenizer.encode(formatted_article))
+        if (curr_evidence_len + formatted_article_len) < (model_max_context - prompt_len - TOPIC_PAGE_MAX_LEN):
             curr_evidence_len += formatted_article_len
             evidence[cluster_idx].append(formatted_article)
         else:
@@ -225,8 +236,8 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
         formatted_article = _format_article(articles[article_idx])
         if not formatted_article:
             continue
-        formatted_article_len = len(_tokenizer.encode(formatted_article))
-        if (curr_evidence_len + formatted_article_len) < (MODEL_MAX_LEN - prompt_len - TOPIC_PAGE_MAX_LEN):
+        formatted_article_len = len(tokenizer.encode(formatted_article))
+        if (curr_evidence_len + formatted_article_len) < (model_max_context - prompt_len - TOPIC_PAGE_MAX_LEN):
             curr_evidence_len += formatted_article_len
             evidence[cluster_idx].append(formatted_article)
         else:
@@ -239,9 +250,46 @@ def format_evidence(articles: list[dict[str, str]], clusters: list[list[int]], _
 
 
 @st.cache_resource(show_spinner=False)
-def load_llm(model_choice: str):
+def load_llm(model_choice: str, echo: bool = False, max_streaming_tokens: int = TOPIC_PAGE_MAX_LEN) -> OpenAI:
     """Load an OpenAI large language model."""
-    return guidance.models.OpenAI(model_choice, echo=False, caching=True, max_streaming_tokens=TOPIC_PAGE_MAX_LEN)
+    return guidance.models.OpenAI(model_choice, echo=echo, max_streaming_tokens=max_streaming_tokens)
+
+
+@st.cache_resource(show_spinner=False)
+def prompt(
+    *,
+    system_prompt: str,
+    instructions_prompt: str,
+    how_to_cite_prompt: str,
+    total_publications: str,
+    canonicalized_entity_name: str,
+    publications_per_year: str,
+    evidence: str,
+    topic_page_prompt: str,
+    model: str,
+    generate=True,
+) -> OpenAI:
+    llm = load_llm(model)
+
+    with system():
+        response = llm + system_prompt
+    with user():
+        response += f"# INSTRUCTIONS\n\n{instructions_prompt}\n\n"
+        response += f"## HOW TO CITE YOUR CLAIMS\n\n{how_to_cite_prompt}\n\n"
+        response += (
+            f"# ENTITY OR CONCEPT\n\n"
+            f"Canonicalized entity name:{canonicalized_entity_name}\n"
+            f"Publications per year: {publications_per_year}\n"
+            f"Total number of publications: {total_publications}\n"
+            f"Supporting literature:\n\n{evidence}\n\n"
+        )
+        response += f"# TOPIC PAGE\n\n{topic_page_prompt}\n\n"
+
+    if generate:
+        with assistant():
+            response += gen("topic_page", temperature=0.0, max_tokens=TOPIC_PAGE_MAX_LEN)
+
+    return response
 
 
 def main():
@@ -249,21 +297,31 @@ def main():
         st.image("https://prior.allenai.org/assets/logos/ai2-logo-header.png", use_column_width=True)
 
         st.header("Settings")
-        st.write(
-            "Please provide an __OpenAI API key__. Modifying additional settings is optional, reasonable defaults"
-            " are provided."
-        )
+        st.write("Modifying settings is optional, reasonable defaults are provided.")
 
         st.subheader("OpenAI API")
         model_choice = st.text_input(
             "Choose a model:",
-            value="gpt-4-0613",
-            help="Any valid model name for the OpenAI API. It is strongly recommended to use GPT-4.",
+            value="gpt-4-1106-preview",
+            help="Any valid model name for the OpenAI API. It is strongly recommended to use a GPT-4 class model.",
+        )
+        model_max_context = st.number_input(
+            "Maximum input tokens:",
+            max_value=16_384,
+            value=16_384,
+            help=(
+                "The maximum number of tokens to allow for the model inputs (minus the prompt plus generated text)."
+                " We will pass as many titles and abstracts to the model as possible, given this limit."
+                " Roughly speaking, 1 title + abstract consumes about 512 tokens.\n\n"
+                " __Note__: You are responsible for ensuring this value is within the limits of the model you choose"
+                " (see https://platform.openai.com/docs/models/ for details)."
+                " Setting a value larger than a models maximum context length will result in an error."
+            ),
         )
         openai_api_key = st.text_input(
             "Enter your API Key:",
             type="password",
-            help="Your key for the OpenAI API.",
+            help="Your key for the OpenAI API. Only required if you are running locally.",
         )
 
         "---"
@@ -283,9 +341,9 @@ def main():
             "Maximum papers to consider",
             min_value=1,
             max_value=10_000,
-            value=10_000,
+            value=2500,
             step=100,
-            help="Determines the maximium number of papers to consider, starting from most to least relevant.",
+            help=("Determines the maximum number of papers to consider, starting from most to least relevant."),
         )
 
         st.subheader("Clustering")
@@ -302,7 +360,7 @@ def main():
             min_value=0.92,
             max_value=1.0,
             value=0.96,
-            help="Titles and abstracts with a cosine similarity >= this value will be clustered",
+            help="Titles and abstracts with a cosine similarity >= this value will be clustered.",
             disabled=not enable_clustering,
         )
         min_community_size = st.slider(
@@ -310,7 +368,7 @@ def main():
             min_value=1,
             max_value=10,
             value=5,
-            help="Clusters smaller than this value will be discarded",
+            help="Clusters smaller than this value will be discarded.",
             disabled=not enable_clustering,
         )
 
@@ -320,36 +378,40 @@ def main():
 
     st.write("# 🪄📄 TOPICAL: TOPIC pages AutomagicaLly")
     st.write(
-        "This demo generates the ability to produce topic pages for biomedical entities and concepts automatically."
-        " Enter a __entity__ or __concept__ of interest below, and a topic page will be generated."
+        "TOPICAL produces topic pages for biomedical entities and concepts automatically."
+        " Enter a __entity__ or __concept__ of interest below, and a topic page will be generated for you."
     )
-    st.caption('An example is provided for you (just hit "__Generate Topic Page__"!)')
+    st.caption('An example is provided, just hit: "__Generate Topic Page__"!')
+
     with st.expander("Search tips 💡"):
         st.write(
-            "For concrete entities that are likely to be mentioned precisely in the the literature"
-            ' (e.g. _"beta-D-Galactoside alpha 2-6-Sialyltransferase"_), a search strategy that works well is to'
-            " look for these mentions in paper titles: `<entity>[title] OR <synonym>[title]`. If the entity exists"
-            " in the [MeSH ontology](https://meshb.nlm.nih.gov/), try adding: `OR <entity>[MeSH Major Topic]`."
+            "TOPICAL supports the full syntax of the PubMed Advanced Search Builder, allowing you to, for example,"
+            " search papers that mention a certain __entity__ or __concept__ in the title, e.g. `<entity>[title]`,"
+            " or to easily include synonyms, e.g. `<entity> OR <synonym>`. However, in most cases simply entering"
+            " the entity verbatim will work well, as PubMed will apply 'automatic term mapping' (ATM) to this query"
+            " to include, among other things, matching MeSH descriptors and pluralization."
         )
 
         st.write(
-            "For more generic entities that are unlikely to be mentioned precisely"
-            ' (e.g. _"Single-Cell Gene Expression Analysis"_), try providing the entity by itself.'
-            " [PubMed](https://pubmed.ncbi.nlm.nih.gov/) will automatically expand your query to search for"
-            " synonyms and related MeSH terms."
+            "It is generally recommended to use the __Canonicalized name__ field to provide a canonicalized name"
+            " for your entity or concept of interest. This will not be used to query PubMed, but it can help keep"
+            " the model on track when generating topic pages, especially in cases where the entity has multiple,"
+            " potentially ambiguous names. Think of it like a title for your topic page!"
+            " If no canonicalized name is provided, the search query will be used instead."
         )
 
     query = st.text_input(
         "Search query",
-        value="microplastic[title] OR microplastics[title] OR Microplastics[MeSH Major Topic]",
+        value="long covid",
         help=(
             "Enter a search query for your entity of interest. This supports the full syntax of the [PubMed"
             ' Advanced Search Builder](https://pubmed.ncbi.nlm.nih.gov/advanced/). See "_Search tips_" for more help.'
         ),
     ).strip()
+
     entity = st.text_input(
         "Canonicalized name",
-        value="Microplastics",
+        value='Post-acute COVID-19 Syndrome (PACS) or "long COVID"',
         help=(
             "Enter a canonicalized name for the entity. This will not be used to query PubMed, but it can help keep"
             " the model on track when generating topic pages, especially in cases where the entity has multiple,"
@@ -406,7 +468,13 @@ def main():
             st.write("Fetching publication years...")
             records = nlm.efetch(",".join(pmids), db="pubmed", rettype="docsum", use_cache=True)
             st.success("Done, publications by year plotted below", icon="📊")
+
+            import time
+
+            start = time.time()
             year_counts = plot_publications_per_year(records, end_year=end_year)
+            end = time.time()
+            print(f"Time taken to plot publications per year: {end - start}")
 
             if len(pmids) > retmax:
                 st.warning(
@@ -442,8 +510,7 @@ def main():
                 st.warning("Clustering disabled. Expect faster responses but worse quality results.", icon="⚠️")
             elif enable_clustering and len(articles) >= MIN_ARTICLES_TO_CLUSTER:
                 st.write("Clustering evidence...")
-                encoder, tokenizer = load_encoder()
-                embeddings = embed_evidence(articles, encoder, tokenizer)
+                embeddings = embed_evidence(articles, model=SPECTER_MODEL)
                 clusters = sbert_util.community_detection(
                     embeddings, min_community_size=min_community_size, threshold=threshold
                 )
@@ -492,58 +559,21 @@ def main():
             clusters = clusters or [[i] for i in range(len(articles))]
 
             # Design a prompt to get GPT to generate topic pages
-            system_prompt = (PROMPT_DIR / "system.txt").read_text().format(domain="biomedical").strip()
+            system_prompt = (PROMPT_DIR / "system.txt").read_text().strip()
             instructions_prompt = (
                 (PROMPT_DIR / "instructions.txt")
                 .read_text()
                 .format(
-                    domain="biomedical",
                     end_year=end_year,
                     min_articles_to_cluster=MIN_ARTICLES_TO_CLUSTER,
                 )
             ).strip()
-            how_to_cite_prompt = (
-                (PROMPT_DIR / "how_to_cite.txt").read_text().format(id_database="PubMed", id_type="PMID")
-            ).strip()
+            how_to_cite_prompt = ((PROMPT_DIR / "how_to_cite.txt").read_text()).strip()
             topic_page_prompt = (PROMPT_DIR / "topic_page.txt").read_text().strip()
             publications_per_year = ", ".join(
                 f"{year}: {count}" for year, count in year_counts.items() if int(year) <= int(end_year)
             )
 
-            def prompt(
-                *,
-                system_prompt: str,
-                instructions_prompt: str,
-                how_to_cite_prompt: str,
-                total_publications: str,
-                canonicalized_entity_name: str,
-                publications_per_year: str,
-                evidence: str,
-                topic_page_prompt: str,
-                llm: OpenAICompletion,
-                generate=True,
-            ) -> str:
-                with system():
-                    response = llm + system_prompt
-                with user():
-                    response += f"# INSTRUCTIONS\n\n{instructions_prompt}\n\n"
-                    response += f"## HOW TO CITE YOUR CLAIMS\n\n{how_to_cite_prompt}\n\n"
-                    response += (
-                        f"# ENTITY OR CONCEPT\n\n"
-                        f"Canonicalized entity name:{canonicalized_entity_name}\n"
-                        f"Publications per year: {publications_per_year}\n"
-                        f"Total number of publications: {total_publications}\n"
-                        f"Supporting literature:\n\n{evidence}\n\n"
-                    )
-                    response += f"# TOPIC PAGE\n\n{topic_page_prompt}\n\n"
-
-                if generate:
-                    with assistant():
-                        response += gen("topic_page", temperature=0.0, max_tokens=TOPIC_PAGE_MAX_LEN)
-
-                return response
-
-            llm = load_llm(model_choice)
             tokenizer = load_tiktokenizer(model_choice)
 
             # Get length of prompt without evidence (and without generating) so we can format the evidence
@@ -556,27 +586,34 @@ def main():
                 publications_per_year=publications_per_year,
                 total_publications=total_publications,
                 evidence="",
-                llm=llm,
+                model=model_choice,
                 generate=False,
             )
 
             prompt_len = len(tokenizer.encode(response._current_prompt()))
-            evidence = format_evidence(articles, clusters, tokenizer, prompt_len)
+            evidence = format_evidence(
+                articles, clusters, model=model_choice, model_max_context=model_max_context, prompt_len=prompt_len
+            )
 
             # Actually make the request to the API
             with st.spinner("Prompting model..."):
-                response = prompt(
-                    system_prompt=system_prompt,
-                    instructions_prompt=instructions_prompt,
-                    how_to_cite_prompt=how_to_cite_prompt,
-                    topic_page_prompt=topic_page_prompt,
-                    canonicalized_entity_name=entity,
-                    publications_per_year=publications_per_year,
-                    total_publications=total_publications,
-                    evidence=evidence,
-                    llm=llm,
-                    generate=True,
-                )
+                try:
+                    response = prompt(
+                        system_prompt=system_prompt,
+                        instructions_prompt=instructions_prompt,
+                        how_to_cite_prompt=how_to_cite_prompt,
+                        topic_page_prompt=topic_page_prompt,
+                        canonicalized_entity_name=entity,
+                        publications_per_year=publications_per_year,
+                        total_publications=total_publications,
+                        evidence=evidence,
+                        model=model_choice,
+                        generate=True,
+                    )
+                # TODO: Unclear why ConstraintException is being thrown. It didn't happen in guidance <0.1.0.
+                except Exception as e:
+                    st.error("Failed to generate topic page (see error below), please try again.")
+                    st.error(e)
 
         if debug:
             st.info(f"__Evidence__:\n\n{evidence}")
@@ -619,6 +656,8 @@ def main():
                 file_name=f"{file_name}.json",
                 help="Download a JSON file containing the markdown formatted topic page and additional metadata.",
             )
+        else:
+            st.stop()
 
     "---"
 
