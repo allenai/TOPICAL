@@ -54,10 +54,15 @@ random.seed(42)
 
 
 @st.cache_data(show_spinner=False, max_entries=5)
-def plot_publications_per_year(records: DictionaryElement, end_year: str) -> dict[str, int]:
-    """Plots a histogram of publications per year (up to an including end_year) in records and returns the counts."""
+def get_publications_per_year(records: list[DictionaryElement], end_year: str) -> dict[str, int]:
+    """Gets the publications per year (up to an including end_year) in records and returns the counts as a dict."""
     pub_years = [int(nlm.get_year_from_medline_date(record["PubDate"])) for record in records]
     year_counts = {year: pub_years.count(year) for year in sorted(set(pub_years)) if int(year) <= int(end_year)}
+    return year_counts
+
+
+def plot_publications_per_year(year_counts: dict[str, int]) -> None:
+    """Plots a histogram of publications per year."""
     st.bar_chart(
         {"Year": list(year_counts.keys()), "Number of Publications": list(year_counts.values())},
         x="Year",
@@ -65,7 +70,6 @@ def plot_publications_per_year(records: DictionaryElement, end_year: str) -> dic
         color="#255ed3",
         use_container_width=True,
     )
-    return year_counts
 
 
 @st.cache_data(show_spinner=False, max_entries=5)
@@ -342,9 +346,13 @@ def main():
             "Maximum papers to consider",
             min_value=1,
             max_value=10_000,
-            value=2500,
+            value=1000,
             step=100,
-            help=("Determines the maximum number of papers to consider, starting from most to least relevant."),
+            help=(
+                "Determines the maximum number of papers to consider, starting from most to least relevant.\n\n"
+                "__Note:__ Larger values will result in a more comprehensive literature search,"
+                " but will take longer to return a topic page."
+            ),
         )
 
         st.subheader("Clustering")
@@ -469,14 +477,10 @@ def main():
             st.write("Fetching publication years...")
             records = nlm.efetch(",".join(pmids), db="pubmed", rettype="docsum", use_cache=True)
             st.success("Done, publications by year plotted below", icon="📊")
-            year_counts = plot_publications_per_year(records, end_year=end_year)
+            year_counts = get_publications_per_year(records, end_year=end_year)
+            plot_publications_per_year(year_counts)
 
             if len(pmids) > retmax:
-                st.warning(
-                    f"Maximum papers to consider set to {retmax} but {len(pmids)} papers were found for your query."
-                    f" Will only use the top {retmax} papers as input",
-                    icon="⚠️",
-                )
                 pmids = pmids[:retmax]
 
             st.write("Downloading titles and abstracts...")
