@@ -11,6 +11,7 @@ import streamlit as st
 import tiktoken
 import torch
 import ujson as json
+from adapters import AutoAdapterModel
 from Bio import Entrez
 from Bio.Entrez.Parser import DictionaryElement
 from guidance import assistant, gen, system, user
@@ -18,7 +19,7 @@ from guidance.models import OpenAI
 from lxml import html
 from more_itertools import chunked
 from sentence_transformers import util as sbert_util
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoTokenizer
 
 from topical import nlm, util
 
@@ -130,7 +131,7 @@ def preprocess_pubmed_articles(records: DictionaryElement) -> list[dict[str, str
 def load_encoder():
     """Load an SPECTER-based text encoder for embedding titles and abstracts."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = AutoModel.from_pretrained(SPECTER_MODEL)
+    model = AutoAdapterModel.from_pretrained(SPECTER_MODEL)
     _ = model.load_adapter(SPECTER_ADAPTOR, source="hf", set_active=True)
     model.to(device)
     tokenizer = AutoTokenizer.from_pretrained(SPECTER_MODEL)
@@ -468,13 +469,7 @@ def main():
             st.write("Fetching publication years...")
             records = nlm.efetch(",".join(pmids), db="pubmed", rettype="docsum", use_cache=True)
             st.success("Done, publications by year plotted below", icon="📊")
-
-            import time
-
-            start = time.time()
             year_counts = plot_publications_per_year(records, end_year=end_year)
-            end = time.time()
-            print(f"Time taken to plot publications per year: {end - start}")
 
             if len(pmids) > retmax:
                 st.warning(
