@@ -2,7 +2,9 @@ import logging
 import os
 import re
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from math import ceil
 from typing import Any, Callable, Iterator
 
 import requests
@@ -24,6 +26,7 @@ ENTREZ_CACHE_DIR = get_cache_dir() / "entrez"
 EFETCH_CACHE_DIR = ENTREZ_CACHE_DIR / "efetch"
 ESEARCH_CACHE_DIR = ENTREZ_CACHE_DIR / "esearch"
 MESH_CACHE_DIR = get_cache_dir() / "mesh"
+MIN_IDS_TO_CHUNK = 200
 
 
 # Complile any regular expressions
@@ -80,7 +83,7 @@ def get_year_from_medline_date(medline_date: str) -> str | None:
     return candidate
 
 
-def efetch(queries: str | list[str], *, use_cache: bool = False, **kwargs) -> str:
+def efetch(queries: str, *, use_cache: bool = False, **kwargs) -> str:
     """Query the Entrez EFetch API and return the results.
 
     If `use_cache`, identical queries will be cached (and retrieved) from disk. `**kwargs` will be passed to the
@@ -94,7 +97,7 @@ def efetch(queries: str | list[str], *, use_cache: bool = False, **kwargs) -> st
     >>> next(nlm.efetch("26209480", db="pubmed", rettype="abstract", retmode="text"))
     >>> "1. Ann Thorac Surg. 2015 Oct;100(4):1298-304; discussion 1304. doi: ..."
     >>> # Search for multiple abstracts
-    >>> list(nlm.efetch(["26209480", "36211543"], db="pubmed", rettype="abstract", retmode="text"))[0]
+    >>> list(nlm.efetch("26209480,36211543", db="pubmed", rettype="abstract", retmode="text"))[0]
     >>> "1. Ann Thorac Surg. 2015 Oct;100(4):1298-304; discussion 1304. doi: ... 2. Front Cardiovasc Med. 2022 ..."
     ```
 
@@ -110,14 +113,39 @@ def efetch(queries: str | list[str], *, use_cache: bool = False, **kwargs) -> st
     max_tries = kwargs.pop("max_tries", None) or 5
     sleep_between_tries = kwargs.pop("sleep_between_tries", None) or 15
 
-    def _efetch(queries: str | list[str]) -> str:
+    def _efetch(queries: str):
         handle = Entrez.efetch(id=queries, max_tries=max_tries, sleep_between_tries=sleep_between_tries, **kwargs)
         results = Entrez.read(handle)
         handle.close()
         return results
 
+    def _efetch_chunk(queries: str | list[str], max_workers: int = 10):
+        # Chunk only if we have more queries than workers
+        queries = [query.strip() for query in queries.split(",") if query] if isinstance(queries, str) else queries
+        chunk_size = ceil(len(queries) / max_workers) if len(queries) > MIN_IDS_TO_CHUNK else len(queries)
+        chunks = [queries[i : i + chunk_size] for i in range(0, len(queries), chunk_size)]
+
+        results: list | dict | None = None
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_chunk = {executor.submit(_efetch, ",".join(chunk)): chunk for chunk in chunks}
+            for future in as_completed(future_to_chunk):
+                result = future.result()
+
+                # Need to handle DictionaryElement and ListElement types separately
+                if isinstance(result, dict):
+                    if not results:
+                        results = result
+                    else:
+                        results["PubmedArticle"].extend(result["PubmedArticle"])
+                else:
+                    if not results:
+                        results = []
+                    results.extend(result)
+
+        return results
+
     if not use_cache:
-        return _efetch(queries)
+        return _efetch_chunk(queries)
     else:
         with Cache(EFETCH_CACHE_DIR) as reference:
             # Create a key from the term and all keyword arguments that is deterministic and invariant to order
@@ -125,7 +153,7 @@ def efetch(queries: str | list[str], *, use_cache: bool = False, **kwargs) -> st
             if key in reference:
                 return reference[key]
             else:
-                results = _efetch(queries)
+                results = _efetch_chunk(queries)
                 reference.add(key, results, retry=True)
                 return results
 
