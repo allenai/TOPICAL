@@ -389,6 +389,7 @@ def main():
     st.write(
         "TOPICAL produces topic pages for biomedical entities and concepts automatically."
         " Enter a __entity__ or __concept__ of interest below, and a topic page will be generated for you."
+        " See [our paper](https://arxiv.org/abs/2405.01796) for more details."
     )
     st.caption('An example is provided, just hit: "__Generate Topic Page__"!')
 
