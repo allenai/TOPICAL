@@ -165,6 +165,8 @@ def embed_evidence(articles: list[str], model: str, _batch_size: int = 32):
         inputs = inputs.to(encoder.device)
         output = encoder(**inputs)
         embeddings.append(output.last_hidden_state[:, 0, :])
+        # Clear the cache to avoid OOM errors
+        torch.cuda.empty_cache()
         # Update the progress bar
         curr_num_embeddings = sum(embedding.size(0) for embedding in embeddings)
         pbar.progress(
