@@ -5,7 +5,7 @@
 
 A tool for automatically generating topic pages for a broad range of biomedical entities and concepts.
 
-A live demo is available at [https://s2-topical.apps.allenai.org](https://s2-topical.apps.allenai.org). See [our paper](https://arxiv.org/abs/2405.01796) for more details.
+See [our paper](https://arxiv.org/abs/2405.01796) for more details.
 
 To run locally, following the instructions below.
 
